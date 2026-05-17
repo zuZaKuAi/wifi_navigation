@@ -1,7 +1,10 @@
 import csv
+import ctypes
+from ctypes import wintypes
 import math
 import re
 import subprocess
+import time
 from pathlib import Path
 
 
@@ -16,6 +19,9 @@ CELL_SIZE_M = 2.475
 # None이면 RSSI가 가장 많이/강하게 잡히는 층을 자동 선택합니다.
 TARGET_FLOOR = None
 POSITION_METHOD = "weighted_centroid"
+WLAN_SCAN_WAIT_SECONDS = 1.5
+WEIGHT_DISTANCE_EXPONENT = 1.2
+MIN_WEIGHT_DISTANCE_M = 2.0
 
 
 def normalize_bssid(value):
@@ -49,13 +55,97 @@ def load_ap_coordinates(path=AP_COORDS_FILE):
     return aps
 
 
+class GUID(ctypes.Structure):
+    _fields_ = [
+        ("Data1", wintypes.DWORD),
+        ("Data2", wintypes.WORD),
+        ("Data3", wintypes.WORD),
+        ("Data4", ctypes.c_ubyte * 8),
+    ]
+
+
+class WLAN_INTERFACE_INFO(ctypes.Structure):
+    _fields_ = [
+        ("InterfaceGuid", GUID),
+        ("strInterfaceDescription", wintypes.WCHAR * 256),
+        ("isState", wintypes.DWORD),
+    ]
+
+
+class WLAN_INTERFACE_INFO_LIST(ctypes.Structure):
+    _fields_ = [
+        ("dwNumberOfItems", wintypes.DWORD),
+        ("dwIndex", wintypes.DWORD),
+        ("InterfaceInfo", WLAN_INTERFACE_INFO * 1),
+    ]
+
+
+class DOT11_SSID(ctypes.Structure):
+    _fields_ = [
+        ("uSSIDLength", wintypes.ULONG),
+        ("ucSSID", ctypes.c_ubyte * 32),
+    ]
+
+
+def trigger_wifi_scan_windows(target_ssid=None):
+    """Ask Windows WLAN AutoConfig to refresh Wi-Fi scan results."""
+    try:
+        wlanapi = ctypes.WinDLL("wlanapi")
+    except OSError:
+        return False
+
+    handle = wintypes.HANDLE()
+    negotiated_version = wintypes.DWORD()
+    interface_list_ptr = ctypes.c_void_p()
+
+    if wlanapi.WlanOpenHandle(2, None, ctypes.byref(negotiated_version), ctypes.byref(handle)) != 0:
+        return False
+
+    try:
+        if wlanapi.WlanEnumInterfaces(handle, None, ctypes.byref(interface_list_ptr)) != 0:
+            return False
+
+        interface_list = ctypes.cast(interface_list_ptr, ctypes.POINTER(WLAN_INTERFACE_INFO_LIST)).contents
+        scan_requested = False
+        ssid_ptr = None
+        ssid = None
+
+        if target_ssid:
+            ssid_bytes = target_ssid.encode("utf-8")[:32]
+            ssid = DOT11_SSID()
+            ssid.uSSIDLength = len(ssid_bytes)
+            for index, byte in enumerate(ssid_bytes):
+                ssid.ucSSID[index] = byte
+            ssid_ptr = ctypes.byref(ssid)
+
+        array_type = WLAN_INTERFACE_INFO * interface_list.dwNumberOfItems
+        interfaces = ctypes.cast(
+            ctypes.addressof(interface_list.InterfaceInfo),
+            ctypes.POINTER(array_type),
+        ).contents
+
+        for interface in interfaces:
+            result = wlanapi.WlanScan(handle, ctypes.byref(interface.InterfaceGuid), ssid_ptr, None, None)
+            scan_requested = scan_requested or result == 0
+
+        return scan_requested
+    finally:
+        if interface_list_ptr:
+            wlanapi.WlanFreeMemory(interface_list_ptr)
+        wlanapi.WlanCloseHandle(handle, None)
+
+
 def scan_wifi_windows(target_ssid=None):
+    if trigger_wifi_scan_windows(target_ssid):
+        time.sleep(WLAN_SCAN_WAIT_SECONDS)
+
     result = subprocess.run(
-        ["netsh", "wlan", "show", "networks", "mode=bssid"],
+        ["cmd", "/c", "netsh", "wlan", "show", "networks", "mode=bssid"],
         capture_output=True,
         text=True,
         encoding="cp949",
         errors="ignore",
+        timeout=10,
     )
 
     output = result.stdout
@@ -154,8 +244,8 @@ def estimate_position_weighted_centroid(measurements):
     total_weight = 0.0
 
     for ap in measurements:
-        # Strong nearby APs should dominate. Distance is in meters, so square it.
-        weight = 1.0 / max(ap["distance"], 1.0) ** 2
+        # Keep nearby APs important, but avoid letting one reflected RSSI spike dominate.
+        weight = 1.0 / max(ap["distance"], MIN_WEIGHT_DISTANCE_M) ** WEIGHT_DISTANCE_EXPONENT
         weighted_x += ap["x"] * weight
         weighted_y += ap["y"] * weight
         total_weight += weight
