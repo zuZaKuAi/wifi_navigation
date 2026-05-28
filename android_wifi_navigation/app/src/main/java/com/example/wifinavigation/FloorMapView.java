@@ -1,5 +1,6 @@
 package com.example.wifinavigation;
 
+import android.animation.ValueAnimator;
 import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
@@ -9,6 +10,7 @@ import android.graphics.Paint;
 import android.graphics.PointF;
 import android.graphics.RectF;
 import android.view.View;
+import android.view.animation.DecelerateInterpolator;
 
 import java.io.IOException;
 import java.util.Collections;
@@ -19,6 +21,7 @@ import java.util.Map;
 
 final class FloorMapView extends View {
     private static final Map<Integer, MapConfig> MAP_CONFIGS = createMapConfigs();
+    private static final long MARKER_ANIMATION_MS = 350L;
 
     private final Paint imagePaint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
     private final Paint apPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -31,7 +34,9 @@ final class FloorMapView extends View {
 
     private Integer floor;
     private WifiPositioning.Estimate estimate;
+    private WifiPositioning.Estimate displayEstimate;
     private List<WifiPositioning.MatchedAp> matched = Collections.emptyList();
+    private ValueAnimator markerAnimator;
 
     FloorMapView(Context context) {
         super(context);
@@ -50,10 +55,11 @@ final class FloorMapView extends View {
     }
 
     void showPosition(Integer floor, WifiPositioning.Estimate estimate, List<WifiPositioning.MatchedAp> matched) {
+        boolean floorChanged = this.floor == null || floor == null || !this.floor.equals(floor);
         this.floor = floor;
         this.estimate = estimate;
         this.matched = matched == null ? Collections.emptyList() : matched;
-        invalidate();
+        updateDisplayEstimate(floorChanged);
     }
 
     @Override
@@ -80,16 +86,17 @@ final class FloorMapView extends View {
             canvas.drawText(item.ap.ap, p.x + 12f, p.y - 10f, apTextPaint);
         }
 
-        if (estimate == null) {
+        WifiPositioning.Estimate markerEstimate = displayEstimate == null ? estimate : displayEstimate;
+        if (markerEstimate == null) {
             return;
         }
 
-        PointF p = mapToView(estimate.x, estimate.y, floor, dst, scale);
+        PointF p = mapToView(markerEstimate.x, markerEstimate.y, floor, dst, scale);
         canvas.drawCircle(p.x, p.y, 24f, markerPaint);
         canvas.drawCircle(p.x, p.y, 24f, markerStrokePaint);
         canvas.drawCircle(p.x, p.y, 7f, labelPaint);
 
-        String label = String.format(Locale.US, "현재 위치 (%.2f, %.2f)", estimate.x, estimate.y);
+        String label = String.format(Locale.US, "현재 위치 (%.2f, %.2f)", markerEstimate.x, markerEstimate.y);
         float textWidth = labelTextPaint.measureText(label);
         float textHeight = labelTextPaint.getTextSize();
         float labelX = Math.min(Math.max(p.x + 28f, 12f), getWidth() - textWidth - 24f);
@@ -97,6 +104,42 @@ final class FloorMapView extends View {
         RectF labelRect = new RectF(labelX - 12f, labelY - textHeight - 10f, labelX + textWidth + 12f, labelY + 10f);
         canvas.drawRoundRect(labelRect, 10f, 10f, labelPaint);
         canvas.drawText(label, labelX, labelY, labelTextPaint);
+    }
+
+    private void updateDisplayEstimate(boolean floorChanged) {
+        if (markerAnimator != null) {
+            markerAnimator.cancel();
+            markerAnimator = null;
+        }
+
+        if (estimate == null || floorChanged || displayEstimate == null) {
+            displayEstimate = estimate;
+            postInvalidateOnAnimation();
+            return;
+        }
+
+        double startX = displayEstimate.x;
+        double startY = displayEstimate.y;
+        double targetX = estimate.x;
+        double targetY = estimate.y;
+        double distance = Math.hypot(targetX - startX, targetY - startY);
+        if (distance < 0.02) {
+            displayEstimate = estimate;
+            postInvalidateOnAnimation();
+            return;
+        }
+
+        markerAnimator = ValueAnimator.ofFloat(0f, 1f);
+        markerAnimator.setDuration(MARKER_ANIMATION_MS);
+        markerAnimator.setInterpolator(new DecelerateInterpolator());
+        markerAnimator.addUpdateListener(animation -> {
+            float t = (float) animation.getAnimatedValue();
+            double x = startX + (targetX - startX) * t;
+            double y = startY + (targetY - startY) * t;
+            displayEstimate = new WifiPositioning.Estimate(x, y, estimate.method);
+            postInvalidateOnAnimation();
+        });
+        markerAnimator.start();
     }
 
     private Bitmap loadMap(int floor) {

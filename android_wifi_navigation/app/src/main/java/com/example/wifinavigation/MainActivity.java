@@ -35,6 +35,7 @@ import java.util.Map;
 public final class MainActivity extends Activity {
     private static final int REQUEST_PERMISSIONS = 1001;
     private static final long REFRESH_MS = 3000L;
+    private static final String PREF_HEADING_OFFSET = "heading_offset_degrees";
 
     private final Handler handler = new Handler(Looper.getMainLooper());
     private WifiManager wifiManager;
@@ -43,6 +44,7 @@ public final class MainActivity extends Activity {
     private TextView positionText;
     private TextView statusText;
     private TextView detailText;
+    private TextView headingOffsetText;
     private Spinner floorSpinner;
     private boolean running = true;
     private Integer requestedFloor;
@@ -72,6 +74,8 @@ public final class MainActivity extends Activity {
         wifiManager = (WifiManager) getApplicationContext().getSystemService(WIFI_SERVICE);
         buildUi();
         pdrTracker = new PdrTracker(this, state -> runOnUiThread(() -> showPdrPosition(state)));
+        pdrTracker.setHeadingOffsetDegrees(getPreferences(MODE_PRIVATE).getFloat(PREF_HEADING_OFFSET, -30f));
+        updateHeadingOffsetText();
 
         try {
             apCoordinates = WifiPositioning.loadApCoordinates(this);
@@ -169,9 +173,25 @@ public final class MainActivity extends Activity {
             }
         });
 
+        Button rotateLeft = new Button(this);
+        rotateLeft.setText("-5");
+        rotateLeft.setOnClickListener(v -> adjustHeadingOffset(-5.0));
+
+        Button rotateRight = new Button(this);
+        rotateRight.setText("+5");
+        rotateRight.setOnClickListener(v -> adjustHeadingOffset(5.0));
+
+        headingOffsetText = new TextView(this);
+        headingOffsetText.setTextSize(13f);
+        headingOffsetText.setPadding(dp(8), 0, 0, 0);
+
         toolbar.addView(floorSpinner, new LinearLayout.LayoutParams(dp(110), LinearLayout.LayoutParams.WRAP_CONTENT));
         toolbar.addView(refresh, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
         toolbar.addView(startStop, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        toolbar.addView(rotateLeft, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        toolbar.addView(rotateRight, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        toolbar.addView(headingOffsetText, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        updateHeadingOffsetText();
 
         positionText = new TextView(this);
         positionText.setText("위치: -");
@@ -274,6 +294,26 @@ public final class MainActivity extends Activity {
         if (pdrTracker != null) {
             pdrTracker.start();
         }
+    }
+
+    private void adjustHeadingOffset(double deltaDegrees) {
+        if (pdrTracker == null) {
+            return;
+        }
+        double offset = pdrTracker.getHeadingOffsetDegrees() + deltaDegrees;
+        pdrTracker.setHeadingOffsetDegrees(offset);
+        getPreferences(MODE_PRIVATE)
+                .edit()
+                .putFloat(PREF_HEADING_OFFSET, (float) offset)
+                .apply();
+        updateHeadingOffsetText();
+    }
+
+    private void updateHeadingOffsetText() {
+        if (headingOffsetText == null || pdrTracker == null) {
+            return;
+        }
+        headingOffsetText.setText(String.format(Locale.US, "%.0f°", pdrTracker.getHeadingOffsetDegrees()));
     }
 
     private String buildDetails(WifiPositioning.PositionResult position) {
