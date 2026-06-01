@@ -27,6 +27,14 @@ final class WifiPositioning {
 
     static Map<String, ApInfo> loadApCoordinates(Context context) throws IOException {
         Map<String, ApInfo> aps = new HashMap<>();
+        for (ApInfo ap : loadApCoordinateList(context)) {
+            aps.put(ap.bssid, ap);
+        }
+        return aps;
+    }
+
+    static List<ApInfo> loadApCoordinateList(Context context) throws IOException {
+        List<ApInfo> aps = new ArrayList<>();
         try (BufferedReader reader = new BufferedReader(new InputStreamReader(
                 context.getAssets().open("ap_coordinates.csv"), StandardCharsets.UTF_8))) {
             String line = reader.readLine();
@@ -36,7 +44,7 @@ final class WifiPositioning {
                     continue;
                 }
                 String bssid = normalizeBssid(cols.get(3));
-                aps.put(bssid, new ApInfo(
+                aps.add(new ApInfo(
                         Integer.parseInt(cols.get(0).trim()),
                         cols.get(1).trim(),
                         cols.get(2).trim(),

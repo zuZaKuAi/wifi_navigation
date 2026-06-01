@@ -19,6 +19,7 @@ import android.view.View;
 import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
+import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.Spinner;
@@ -40,15 +41,21 @@ public final class MainActivity extends Activity {
     private final Handler handler = new Handler(Looper.getMainLooper());
     private WifiManager wifiManager;
     private Map<String, WifiPositioning.ApInfo> apCoordinates;
+    private List<WifiPositioning.ApInfo> apCoordinateList;
     private FloorMapView mapView;
     private TextView positionText;
     private TextView statusText;
     private TextView detailText;
     private TextView headingOffsetText;
+    private EditText destinationInput;
+    private Spinner travelModeSpinner;
     private Spinner floorSpinner;
     private boolean running = true;
     private Integer requestedFloor;
     private PdrTracker pdrTracker;
+    private NavigationGraph navigationGraph;
+    private NavigationGraph.Point currentPoint;
+    private String activeDestinationQuery;
     private List<WifiPositioning.MatchedAp> latestMatched = new ArrayList<>();
 
     private final Runnable periodicScan = new Runnable() {
@@ -73,11 +80,13 @@ public final class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         wifiManager = (WifiManager) getApplicationContext().getSystemService(WIFI_SERVICE);
         buildUi();
+        navigationGraph = new NavigationGraph(this);
         pdrTracker = new PdrTracker(this, state -> runOnUiThread(() -> showPdrPosition(state)));
         pdrTracker.setHeadingOffsetDegrees(getPreferences(MODE_PRIVATE).getFloat(PREF_HEADING_OFFSET, -30f));
         updateHeadingOffsetText();
 
         try {
+            apCoordinateList = WifiPositioning.loadApCoordinateList(this);
             apCoordinates = WifiPositioning.loadApCoordinates(this);
         } catch (IOException e) {
             statusText.setText("AP 좌표 파일을 읽지 못했습니다.");
@@ -193,6 +202,32 @@ public final class MainActivity extends Activity {
         toolbar.addView(headingOffsetText, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
         updateHeadingOffsetText();
 
+        LinearLayout navBar = new LinearLayout(this);
+        navBar.setOrientation(LinearLayout.HORIZONTAL);
+        navBar.setGravity(Gravity.CENTER_VERTICAL);
+        navBar.setPadding(pad, 0, pad, dp(8));
+
+        destinationInput = new EditText(this);
+        destinationInput.setSingleLine(true);
+        destinationInput.setHint("room");
+        destinationInput.setTextSize(14f);
+
+        travelModeSpinner = new Spinner(this);
+        ArrayAdapter<String> modeAdapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, new String[]{"stairs", "elevator"});
+        modeAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        travelModeSpinner.setAdapter(modeAdapter);
+
+        Button guide = new Button(this);
+        guide.setText("Guide");
+        guide.setOnClickListener(v -> {
+            activeDestinationQuery = destinationInput.getText().toString();
+            updateNavigationRoute();
+        });
+
+        navBar.addView(destinationInput, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        navBar.addView(travelModeSpinner, new LinearLayout.LayoutParams(dp(120), LinearLayout.LayoutParams.WRAP_CONTENT));
+        navBar.addView(guide, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+
         positionText = new TextView(this);
         positionText.setText("위치: -");
         positionText.setTextSize(15f);
@@ -212,6 +247,7 @@ public final class MainActivity extends Activity {
         details.addView(detailText);
 
         root.addView(toolbar);
+        root.addView(navBar);
         root.addView(positionText);
         root.addView(statusText);
         root.addView(mapView, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
@@ -273,21 +309,74 @@ public final class MainActivity extends Activity {
                 : pdrTracker.correctWithWifi(position.floor, position.estimate.x, position.estimate.y);
         double displayX = fused == null ? position.estimate.x : fused.x;
         double displayY = fused == null ? position.estimate.y : fused.y;
-        WifiPositioning.Estimate displayEstimate = new WifiPositioning.Estimate(displayX, displayY, "pdr_wifi_fused");
+        currentPoint = navigationGraph.snapToCorridor(position.floor, displayX, displayY);
+        WifiPositioning.Estimate displayEstimate = new WifiPositioning.Estimate(
+                currentPoint.x,
+                currentPoint.y,
+                (fused == null ? position.estimate.method : "pdr_wifi_fused") + "_corridor"
+        );
 
-        positionText.setText(String.format(Locale.US, "위치: %d층 (%.2f, %.2f)", position.floor, displayX, displayY));
+        positionText.setText(String.format(Locale.US, "위치: %d층 (%.2f, %.2f)", position.floor, currentPoint.x, currentPoint.y));
         statusText.setText("마지막 갱신: " + new SimpleDateFormat("HH:mm:ss", Locale.US).format(new Date()));
         detailText.setText(buildDetails(position));
         mapView.showPosition(position.floor, displayEstimate, position.matched);
+        updateNavigationRoute();
     }
 
     private void showPdrPosition(PdrTracker.State state) {
         if (state == null) {
             return;
         }
-        WifiPositioning.Estimate estimate = new WifiPositioning.Estimate(state.x, state.y, "pdr_step");
-        positionText.setText(String.format(Locale.US, "위치: %d층 (%.2f, %.2f)", state.floor, state.x, state.y));
+        currentPoint = navigationGraph.snapToCorridor(state.floor, state.x, state.y);
+        WifiPositioning.Estimate estimate = new WifiPositioning.Estimate(currentPoint.x, currentPoint.y, "pdr_step_corridor");
+        positionText.setText(String.format(Locale.US, "위치: %d층 (%.2f, %.2f)", state.floor, currentPoint.x, currentPoint.y));
         mapView.showPosition(state.floor, estimate, latestMatched);
+        updateNavigationRoute();
+    }
+
+    private void updateNavigationRoute() {
+        if (activeDestinationQuery == null || activeDestinationQuery.trim().isEmpty()
+                || currentPoint == null || navigationGraph == null || apCoordinateList == null) {
+            return;
+        }
+
+        WifiPositioning.ApInfo destination = navigationGraph.findDestination(apCoordinateList, activeDestinationQuery);
+        if (destination == null) {
+            statusText.setText("Destination not found: " + activeDestinationQuery);
+            mapView.showRoute(null);
+            return;
+        }
+
+        NavigationGraph.Point target = navigationGraph.snapToCorridor(destination.floor, destination.x, destination.y);
+        NavigationGraph.Route route;
+        if (currentPoint.floor == target.floor) {
+            route = navigationGraph.route(currentPoint.floor, currentPoint, target);
+            if (route.points.isEmpty()) {
+                statusText.setText("No corridor route to " + activeDestinationQuery);
+                mapView.showRoute(null);
+                return;
+            }
+            statusText.setText(String.format(Locale.US, "Route to %s on %dF", activeDestinationQuery, target.floor));
+        } else {
+            NavigationGraph.ConnectorType type = travelModeSpinner.getSelectedItemPosition() == 1
+                    ? NavigationGraph.ConnectorType.ELEVATOR
+                    : NavigationGraph.ConnectorType.STAIRS;
+            route = navigationGraph.routeToNearestConnector(currentPoint.floor, currentPoint, type);
+            if (route.points.isEmpty()) {
+                statusText.setText("No reachable connector for selected mode on this floor");
+                mapView.showRoute(null);
+                return;
+            }
+            String mode = type == NavigationGraph.ConnectorType.ELEVATOR ? "elevator" : "stairs";
+            statusText.setText(String.format(
+                    Locale.US,
+                    "Go to nearest %s, then move to %dF for %s",
+                    mode,
+                    target.floor,
+                    activeDestinationQuery
+            ));
+        }
+        mapView.showRoute(route);
     }
 
     private void startPdr() {

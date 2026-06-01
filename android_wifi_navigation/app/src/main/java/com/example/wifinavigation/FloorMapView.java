@@ -20,7 +20,6 @@ import java.util.Locale;
 import java.util.Map;
 
 final class FloorMapView extends View {
-    private static final Map<Integer, MapConfig> MAP_CONFIGS = createMapConfigs();
     private static final long MARKER_ANIMATION_MS = 350L;
 
     private final Paint imagePaint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
@@ -28,6 +27,8 @@ final class FloorMapView extends View {
     private final Paint apTextPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint markerPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint markerStrokePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint routePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint destinationPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint labelPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint labelTextPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Map<Integer, Bitmap> maps = new HashMap<>();
@@ -35,6 +36,7 @@ final class FloorMapView extends View {
     private Integer floor;
     private WifiPositioning.Estimate estimate;
     private WifiPositioning.Estimate displayEstimate;
+    private NavigationGraph.Route route;
     private List<WifiPositioning.MatchedAp> matched = Collections.emptyList();
     private ValueAnimator markerAnimator;
 
@@ -49,6 +51,12 @@ final class FloorMapView extends View {
         markerStrokePaint.setStyle(Paint.Style.STROKE);
         markerStrokePaint.setStrokeWidth(8f);
         markerStrokePaint.setColor(Color.WHITE);
+        routePaint.setStyle(Paint.Style.STROKE);
+        routePaint.setStrokeWidth(10f);
+        routePaint.setStrokeCap(Paint.Cap.ROUND);
+        routePaint.setStrokeJoin(Paint.Join.ROUND);
+        routePaint.setColor(Color.rgb(37, 99, 235));
+        destinationPaint.setColor(Color.rgb(22, 163, 74));
         labelPaint.setColor(Color.argb(235, 255, 255, 255));
         labelTextPaint.setColor(Color.rgb(35, 35, 35));
         labelTextPaint.setTextSize(28f);
@@ -62,10 +70,15 @@ final class FloorMapView extends View {
         updateDisplayEstimate(floorChanged);
     }
 
+    void showRoute(NavigationGraph.Route route) {
+        this.route = route;
+        postInvalidateOnAnimation();
+    }
+
     @Override
     protected void onDraw(Canvas canvas) {
         super.onDraw(canvas);
-        if (floor == null || !MAP_CONFIGS.containsKey(floor)) {
+        if (floor == null || !FloorConfig.CONFIGS.containsKey(floor)) {
             drawCenteredText(canvas, "No floor selected");
             return;
         }
@@ -80,6 +93,7 @@ final class FloorMapView extends View {
         canvas.drawBitmap(map, null, dst, imagePaint);
 
         float scale = dst.width() / map.getWidth();
+        drawRoute(canvas, dst, scale);
         for (WifiPositioning.MatchedAp item : matched) {
             PointF p = mapToView(item.ap.x, item.ap.y, floor, dst, scale);
             canvas.drawCircle(p.x, p.y, 9f, apPaint);
@@ -148,7 +162,7 @@ final class FloorMapView extends View {
             return cached;
         }
         try {
-            Bitmap bitmap = BitmapFactory.decodeStream(getContext().getAssets().open(MAP_CONFIGS.get(floor).file));
+            Bitmap bitmap = BitmapFactory.decodeStream(getContext().getAssets().open(FloorConfig.CONFIGS.get(floor).mapFile));
             maps.put(floor, bitmap);
             return bitmap;
         } catch (IOException e) {
@@ -157,10 +171,28 @@ final class FloorMapView extends View {
     }
 
     private static PointF mapToView(double x, double y, int floor, RectF dst, float viewScale) {
-        MapConfig config = MAP_CONFIGS.get(floor);
-        float px = (float) (config.originX + x * config.pixelPerUnit);
-        float py = (float) (config.originY - y * config.pixelPerUnit);
+        FloorConfig config = FloorConfig.CONFIGS.get(floor);
+        float px = config.unitToPixelX(x);
+        float py = config.unitToPixelY(y);
         return new PointF(dst.left + px * viewScale, dst.top + py * viewScale);
+    }
+
+    private void drawRoute(Canvas canvas, RectF dst, float scale) {
+        if (route == null || floor == null || route.floor != floor || route.points.size() < 2) {
+            return;
+        }
+        NavigationGraph.Point previous = route.points.get(0);
+        for (int i = 1; i < route.points.size(); i++) {
+            NavigationGraph.Point current = route.points.get(i);
+            PointF a = mapToView(previous.x, previous.y, floor, dst, scale);
+            PointF b = mapToView(current.x, current.y, floor, dst, scale);
+            canvas.drawLine(a.x, a.y, b.x, b.y, routePaint);
+            previous = current;
+        }
+        NavigationGraph.Point destination = route.points.get(route.points.size() - 1);
+        PointF p = mapToView(destination.x, destination.y, floor, dst, scale);
+        canvas.drawCircle(p.x, p.y, 17f, destinationPaint);
+        canvas.drawCircle(p.x, p.y, 17f, markerStrokePaint);
     }
 
     private static RectF fitCenter(Bitmap bitmap, int viewWidth, int viewHeight) {
@@ -178,25 +210,4 @@ final class FloorMapView extends View {
         labelTextPaint.setTextAlign(Paint.Align.LEFT);
     }
 
-    private static Map<Integer, MapConfig> createMapConfigs() {
-        Map<Integer, MapConfig> configs = new HashMap<>();
-        configs.put(3, new MapConfig("3fmap.png", 355f, 1083f, 31f));
-        configs.put(4, new MapConfig("4fmap.png", 339f, 1064f, 31f));
-        configs.put(5, new MapConfig("5fmap.png", 356f, 1129f, 31f));
-        return configs;
-    }
-
-    private static final class MapConfig {
-        final String file;
-        final float originX;
-        final float originY;
-        final float pixelPerUnit;
-
-        MapConfig(String file, float originX, float originY, float pixelPerUnit) {
-            this.file = file;
-            this.originX = originX;
-            this.originY = originY;
-            this.pixelPerUnit = pixelPerUnit;
-        }
-    }
 }
