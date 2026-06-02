@@ -40,9 +40,9 @@ final class FloorConfig {
 
     private static Map<Integer, FloorConfig> createConfigs() {
         Map<Integer, FloorConfig> configs = new HashMap<>();
-        configs.put(3, new FloorConfig(3, "3fmap.png", "corridor_3f.png", 355f, 1083f, 31f));
-        configs.put(4, new FloorConfig(4, "4fmap.png", "corridor_4f.png", 339f, 1064f, 31f));
-        configs.put(5, new FloorConfig(5, "5fmap.png", "corridor_5f.png", 356f, 1129f, 31f));
+        configs.put(3, new FloorConfig(3, "3fmap_clean.png", "corridor_3f.png", 355f, 1083f, 31f));
+        configs.put(4, new FloorConfig(4, "4fmap_clean.png", "corridor_4f.png", 339f, 1064f, 31f));
+        configs.put(5, new FloorConfig(5, "5fmap_clean.png", "corridor_5f.png", 356f, 1129f, 31f));
         return configs;
     }
 }
