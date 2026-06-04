@@ -190,9 +190,7 @@ final class NavigationGraph {
         }
 
         Point snap(double x, double y) {
-            int startX = clamp(Math.round(config.unitToPixelX(x) / CELL_PX), 0, cols - 1);
-            int startY = clamp(Math.round(config.unitToPixelY(y) / CELL_PX), 0, rows - 1);
-            int best = nearestWalkableIndex(startX, startY);
+            int best = nearestCorridorIndex(config.unitToPixelX(x), config.unitToPixelY(y));
             return best < 0 ? new Point(config.floor, x, y) : pointFor(best);
         }
 
@@ -346,8 +344,16 @@ final class NavigationGraph {
         }
 
         private int nearestWalkableIndex(int startX, int startY) {
+            return nearestIndex(startX, startY, true);
+        }
+
+        private int nearestCorridorIndex(double px, double py) {
+            return nearestByPixelDistance(px, py, false);
+        }
+
+        private int nearestIndex(int startX, int startY, boolean includeConnectors) {
             int start = index(startX, startY, cols);
-            if (isWalkable(start)) {
+            if (matchesTarget(start, includeConnectors)) {
                 return start;
             }
             boolean[] visited = new boolean[cells.length];
@@ -372,7 +378,7 @@ final class NavigationGraph {
                         if (visited[next]) {
                             continue;
                         }
-                        if (isWalkable(next)) {
+                        if (matchesTarget(next, includeConnectors)) {
                             return next;
                         }
                         visited[next] = true;
@@ -381,6 +387,29 @@ final class NavigationGraph {
                 }
             }
             return -1;
+        }
+
+        private int nearestByPixelDistance(double px, double py, boolean includeConnectors) {
+            int best = -1;
+            double bestDistance = Double.POSITIVE_INFINITY;
+            for (int index = 0; index < cells.length; index++) {
+                if (!matchesTarget(index, includeConnectors)) {
+                    continue;
+                }
+                double distance = pixelDistance(index, px, py);
+                if (distance < bestDistance) {
+                    bestDistance = distance;
+                    best = index;
+                }
+            }
+            return best;
+        }
+
+        private boolean matchesTarget(int index, boolean includeConnectors) {
+            if (!isWalkable(index)) {
+                return false;
+            }
+            return includeConnectors || (cells[index] & STAIRS) == 0;
         }
 
         private boolean isWalkable(int index) {

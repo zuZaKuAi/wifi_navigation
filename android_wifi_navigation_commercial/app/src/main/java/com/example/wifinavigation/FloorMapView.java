@@ -34,6 +34,8 @@ final class FloorMapView extends View {
     private final Paint apPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint apTextPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint markerPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint wifiOnlyPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint headingConePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint markerStrokePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint routePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint routeHaloPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -46,6 +48,8 @@ final class FloorMapView extends View {
     private Integer floor;
     private WifiPositioning.Estimate estimate;
     private WifiPositioning.Estimate displayEstimate;
+    private WifiPositioning.Estimate wifiOnlyEstimate;
+    private Double headingRadians;
     private NavigationGraph.Route route;
     private List<WifiPositioning.MatchedAp> matched = Collections.emptyList();
     private ValueAnimator markerAnimator;
@@ -66,6 +70,9 @@ final class FloorMapView extends View {
         apTextPaint.setColor(Color.rgb(20, 94, 180));
         apTextPaint.setTextSize(26f);
         markerPaint.setColor(Color.rgb(226, 45, 75));
+        wifiOnlyPaint.setColor(Color.rgb(37, 99, 235));
+        headingConePaint.setColor(Color.argb(58, 226, 45, 75));
+        headingConePaint.setStyle(Paint.Style.FILL);
         markerStrokePaint.setStyle(Paint.Style.STROKE);
         markerStrokePaint.setStrokeWidth(8f);
         markerStrokePaint.setColor(Color.WHITE);
@@ -101,9 +108,30 @@ final class FloorMapView extends View {
     }
 
     void showPosition(Integer floor, WifiPositioning.Estimate estimate, List<WifiPositioning.MatchedAp> matched) {
+        showPosition(floor, estimate, null, matched);
+    }
+
+    void showPosition(
+            Integer floor,
+            WifiPositioning.Estimate estimate,
+            WifiPositioning.Estimate wifiOnlyEstimate,
+            List<WifiPositioning.MatchedAp> matched
+    ) {
+        showPosition(floor, estimate, wifiOnlyEstimate, null, matched);
+    }
+
+    void showPosition(
+            Integer floor,
+            WifiPositioning.Estimate estimate,
+            WifiPositioning.Estimate wifiOnlyEstimate,
+            Double headingRadians,
+            List<WifiPositioning.MatchedAp> matched
+    ) {
         boolean floorChanged = this.floor == null || floor == null || !this.floor.equals(floor);
         this.floor = floor;
         this.estimate = estimate;
+        this.wifiOnlyEstimate = floorChanged ? wifiOnlyEstimate : (wifiOnlyEstimate == null ? this.wifiOnlyEstimate : wifiOnlyEstimate);
+        this.headingRadians = headingRadians;
         this.matched = matched == null ? Collections.emptyList() : matched;
         updateDisplayEstimate(floorChanged);
     }
@@ -206,7 +234,15 @@ final class FloorMapView extends View {
             return;
         }
 
+        if (showApDebug && wifiOnlyEstimate != null) {
+            PointF wifiPoint = mapToView(wifiOnlyEstimate.x, wifiOnlyEstimate.y, floor, dst, scale);
+            canvas.drawCircle(wifiPoint.x, wifiPoint.y, 15f, wifiOnlyPaint);
+            canvas.drawCircle(wifiPoint.x, wifiPoint.y, 15f, markerStrokePaint);
+            canvas.drawCircle(wifiPoint.x, wifiPoint.y, 5f, labelPaint);
+        }
+
         PointF p = mapToView(markerEstimate.x, markerEstimate.y, floor, dst, scale);
+        drawHeadingCone(canvas, p);
         canvas.drawCircle(p.x, p.y, 24f, markerPaint);
         canvas.drawCircle(p.x, p.y, 24f, markerStrokePaint);
         canvas.drawCircle(p.x, p.y, 7f, labelPaint);
@@ -219,6 +255,17 @@ final class FloorMapView extends View {
         RectF labelRect = new RectF(labelX - 12f, labelY - textHeight - 10f, labelX + textWidth + 12f, labelY + 10f);
         canvas.drawRoundRect(labelRect, 10f, 10f, labelPaint);
         canvas.drawText(label, labelX, labelY, labelTextPaint);
+    }
+
+    private void drawHeadingCone(Canvas canvas, PointF center) {
+        if (headingRadians == null) {
+            return;
+        }
+        float radius = 104f;
+        float sweep = 58f;
+        float centerAngle = (float) Math.toDegrees(Math.atan2(Math.cos(headingRadians), Math.sin(headingRadians)));
+        RectF oval = new RectF(center.x - radius, center.y - radius, center.x + radius, center.y + radius);
+        canvas.drawArc(oval, centerAngle - sweep / 2f, sweep, true, headingConePaint);
     }
 
     private void updateDisplayEstimate(boolean floorChanged) {

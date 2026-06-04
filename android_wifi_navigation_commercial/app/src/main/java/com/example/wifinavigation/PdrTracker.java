@@ -13,7 +13,7 @@ final class PdrTracker implements SensorEventListener {
 
     private static final float DEFAULT_STEP_LENGTH_M = 0.525f;
     private static final double WIFI_CORRECTION_ALPHA = 0.60;
-    private static final double DEFAULT_HEADING_OFFSET_DEGREES = -30.0;
+    private static final double DEFAULT_HEADING_OFFSET_DEGREES = 10.0;
     private static final float ACCEL_STEP_THRESHOLD = 1.2f;
     private static final long ACCEL_STEP_MIN_INTERVAL_NS = 320_000_000L;
     private static final long STEP_DETECTOR_STALE_NS = 2_000_000_000L;
@@ -106,7 +106,7 @@ final class PdrTracker implements SensorEventListener {
         if (!hasPosition || floor == null) {
             return null;
         }
-        return new State(floor, x, y, hasHeading, isAvailable());
+        return new State(floor, x, y, hasHeading, correctedHeadingRadians(), isAvailable());
     }
 
     @Override
@@ -139,12 +139,16 @@ final class PdrTracker implements SensorEventListener {
             return;
         }
         double stepCells = stepLengthM / WifiPositioning.CELL_SIZE_M;
-        double correctedHeading = headingRadians + Math.toRadians(headingOffsetDegrees);
+        double correctedHeading = correctedHeadingRadians();
         x += Math.sin(correctedHeading) * stepCells;
-        y += Math.cos(correctedHeading) * stepCells;
+        y -= Math.cos(correctedHeading) * stepCells;
         if (listener != null) {
             listener.onPdrPositionChanged(currentState());
         }
+    }
+
+    private double correctedHeadingRadians() {
+        return -headingRadians + Math.toRadians(headingOffsetDegrees) + Math.PI;
     }
 
     private void maybeDetectStepFromAccelerometer(SensorEvent event) {
@@ -177,13 +181,15 @@ final class PdrTracker implements SensorEventListener {
         final double x;
         final double y;
         final boolean hasHeading;
+        final double headingRadians;
         final boolean sensorsAvailable;
 
-        State(int floor, double x, double y, boolean hasHeading, boolean sensorsAvailable) {
+        State(int floor, double x, double y, boolean hasHeading, double headingRadians, boolean sensorsAvailable) {
             this.floor = floor;
             this.x = x;
             this.y = y;
             this.hasHeading = hasHeading;
+            this.headingRadians = headingRadians;
             this.sensorsAvailable = sensorsAvailable;
         }
     }

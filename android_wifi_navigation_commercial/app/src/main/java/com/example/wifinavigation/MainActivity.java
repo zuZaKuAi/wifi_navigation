@@ -68,6 +68,7 @@ public final class MainActivity extends Activity {
     private PdrTracker pdrTracker;
     private NavigationGraph navigationGraph;
     private NavigationGraph.Point currentPoint;
+    private WifiPositioning.Estimate latestWifiOnlyEstimate;
     private String activeDestinationQuery;
     private List<WifiPositioning.MatchedAp> latestMatched = new ArrayList<>();
     private WifiFingerprint lastWifiFingerprint;
@@ -100,7 +101,7 @@ public final class MainActivity extends Activity {
         buildUi();
         navigationGraph = new NavigationGraph(this);
         pdrTracker = new PdrTracker(this, state -> runOnUiThread(() -> showPdrPosition(state)));
-        pdrTracker.setHeadingOffsetDegrees(getPreferences(MODE_PRIVATE).getFloat(PREF_HEADING_OFFSET, -30f));
+        pdrTracker.setHeadingOffsetDegrees(getPreferences(MODE_PRIVATE).getFloat(PREF_HEADING_OFFSET, 10f));
         updateHeadingText();
 
         try {
@@ -301,7 +302,7 @@ public final class MainActivity extends Activity {
 
         currentPositionText = label("좌표 --", 13f, Color.rgb(75, 85, 99), false);
         accuracyText = label("AP 매칭 --", 13f, Color.rgb(75, 85, 99), false);
-        headingText = label("방향 보정 -30°", 13f, Color.rgb(75, 85, 99), false);
+        headingText = label("방향 보정 10°", 13f, Color.rgb(75, 85, 99), false);
         bottomSheet.addView(currentPositionText);
         bottomSheet.addView(accuracyText);
         bottomSheet.addView(headingText);
@@ -414,6 +415,7 @@ public final class MainActivity extends Activity {
         WifiPositioning.PositionResult position = WifiPositioning.estimate(results, apCoordinates, requestedFloor);
         if (position.estimate == null || position.floor == null) {
             latestMatched = position.matched;
+            latestWifiOnlyEstimate = null;
             if (floorTransitionActive) {
                 showFloorTransitionPosition();
                 debugText.setText("목표 층 Wi-Fi를 기다리는 중입니다.");
@@ -431,6 +433,12 @@ public final class MainActivity extends Activity {
         }
 
         latestMatched = position.matched;
+        latestWifiOnlyEstimate = position.estimate;
+        NavigationGraph.Point snappedWifiPoint = navigationGraph.snapToCorridor(
+                position.floor,
+                position.estimate.x,
+                position.estimate.y
+        );
         if (floorTransitionActive) {
             if (floorTransitionTargetFloor != null && position.floor == floorTransitionTargetFloor) {
                 completeFloorTransition(position);
@@ -446,22 +454,20 @@ public final class MainActivity extends Activity {
         lastWifiFingerprint = currentFingerprint;
 
         PdrTracker.State fused = null;
-        boolean wifiCorrectionHeld = false;
         if (pdrTracker != null) {
             if (wifiChanged) {
-                fused = pdrTracker.correctWithWifi(position.floor, position.estimate.x, position.estimate.y);
+                fused = pdrTracker.correctWithWifi(snappedWifiPoint.floor, snappedWifiPoint.x, snappedWifiPoint.y);
             } else {
                 fused = pdrTracker.currentState();
-                wifiCorrectionHeld = fused != null;
             }
         }
-        double displayX = fused == null ? position.estimate.x : fused.x;
-        double displayY = fused == null ? position.estimate.y : fused.y;
-        currentPoint = navigationGraph.snapToCorridor(position.floor, displayX, displayY);
+        currentPoint = fused == null
+                ? snappedWifiPoint
+                : navigationGraph.snapToCorridor(fused.floor, fused.x, fused.y);
         WifiPositioning.Estimate displayEstimate = new WifiPositioning.Estimate(
                 currentPoint.x,
                 currentPoint.y,
-                (fused == null ? position.estimate.method : (wifiCorrectionHeld ? "pdr_wifi_held" : "pdr_wifi_fused")) + "_corridor"
+                (fused == null ? position.estimate.method : "pdr_from_wifi_corridor") + "_corridor"
         );
 
         currentFloorText.setText(position.floor + "F");
@@ -471,7 +477,13 @@ public final class MainActivity extends Activity {
         routeSubtitleText.setText("마지막 갱신 " + new SimpleDateFormat("HH:mm:ss", Locale.US).format(new Date()));
         showStatus("실내 위치가 갱신되었습니다.");
         debugText.setText(buildDetails(position));
-        mapView.showPosition(position.floor, displayEstimate, position.matched);
+        mapView.showPosition(
+                position.floor,
+                displayEstimate,
+                position.estimate,
+                fused != null && fused.hasHeading ? fused.headingRadians : null,
+                position.matched
+        );
         updateNavigationRoute();
     }
 
@@ -484,10 +496,20 @@ public final class MainActivity extends Activity {
             return;
         }
         currentPoint = navigationGraph.snapToCorridor(state.floor, state.x, state.y);
-        WifiPositioning.Estimate estimate = new WifiPositioning.Estimate(currentPoint.x, currentPoint.y, "pdr_step_corridor");
+        WifiPositioning.Estimate estimate = new WifiPositioning.Estimate(
+                currentPoint.x,
+                currentPoint.y,
+                "pdr_step_corridor"
+        );
         currentFloorText.setText(state.floor + "F");
         currentPositionText.setText(String.format(Locale.US, "현재 위치 %dF · %.2f, %.2f", state.floor, currentPoint.x, currentPoint.y));
-        mapView.showPosition(state.floor, estimate, latestMatched);
+        mapView.showPosition(
+                state.floor,
+                estimate,
+                latestWifiOnlyEstimate,
+                state.hasHeading ? state.headingRadians : null,
+                latestMatched
+        );
         updateNavigationRoute();
     }
 
@@ -584,7 +606,7 @@ public final class MainActivity extends Activity {
         currentFloorText.setText(connector.floor + "F");
         currentPositionText.setText(String.format(Locale.US, "현재 위치 %dF · %.2f, %.2f", connector.floor, connector.x, connector.y));
         debugText.setText(buildDetails(position));
-        mapView.showPosition(connector.floor, estimate, position.matched);
+        mapView.showPosition(connector.floor, estimate, position.estimate, position.matched);
         updateNavigationRoute();
     }
 
@@ -596,7 +618,7 @@ public final class MainActivity extends Activity {
         WifiPositioning.Estimate estimate = new WifiPositioning.Estimate(currentPoint.x, currentPoint.y, "floor_transition_locked");
         currentFloorText.setText(currentPoint.floor + "F");
         currentPositionText.setText(String.format(Locale.US, "현재 위치 %dF · %.2f, %.2f", currentPoint.floor, currentPoint.x, currentPoint.y));
-        mapView.showPosition(currentPoint.floor, estimate, latestMatched);
+        mapView.showPosition(currentPoint.floor, estimate, latestWifiOnlyEstimate, latestMatched);
         mapView.showRoute(null);
         String mode = floorTransitionConnectorType == NavigationGraph.ConnectorType.ELEVATOR ? "엘리베이터" : "계단";
         routeTitleText.setText("층 이동 중");
