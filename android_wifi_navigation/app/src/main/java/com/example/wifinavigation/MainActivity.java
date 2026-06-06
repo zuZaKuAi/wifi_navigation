@@ -7,6 +7,9 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.pm.PackageManager;
+import android.graphics.Color;
+import android.graphics.drawable.GradientDrawable;
+import android.graphics.Typeface;
 import android.net.wifi.ScanResult;
 import android.net.wifi.WifiManager;
 import android.os.Build;
@@ -20,6 +23,8 @@ import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.EditText;
+import android.widget.FrameLayout;
+import android.widget.ImageButton;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.Spinner;
@@ -139,128 +144,247 @@ public final class MainActivity extends Activity {
         }
     }
 
+    private boolean detailExpanded = false;
+    private LinearLayout detailPanel;
+    private Button startStopBtn;
+
     private void buildUi() {
         int pad = dp(12);
-        LinearLayout root = new LinearLayout(this);
-        root.setOrientation(LinearLayout.VERTICAL);
-        root.setBackgroundColor(0xfff5f6f8);
 
-        LinearLayout toolbar = new LinearLayout(this);
-        toolbar.setOrientation(LinearLayout.HORIZONTAL);
-        toolbar.setGravity(Gravity.CENTER_VERTICAL);
-        toolbar.setPadding(pad, pad, pad, dp(8));
+        // Root: FrameLayout so map fills the whole screen and UI floats on top
+        FrameLayout root = new FrameLayout(this);
+        root.setBackgroundColor(0xffeeeeee);
 
-        floorSpinner = new Spinner(this);
-        ArrayAdapter<String> adapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, new String[]{"auto", "3", "4", "5"});
-        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
-        floorSpinner.setAdapter(adapter);
-        floorSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
-            @Override
-            public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
-                String value = (String) parent.getItemAtPosition(position);
-                requestedFloor = "auto".equals(value) ? null : Integer.parseInt(value);
-                requestScan();
-            }
+        // --- Map (fills entire screen) ---
+        mapView = new FloorMapView(this);
+        root.addView(mapView, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT));
 
-            @Override
-            public void onNothingSelected(AdapterView<?> parent) {
-            }
-        });
-
-        Button refresh = new Button(this);
-        refresh.setText("갱신");
-        refresh.setOnClickListener(v -> requestScan());
-
-        Button startStop = new Button(this);
-        startStop.setText("정지");
-        startStop.setOnClickListener(v -> {
-            running = !running;
-            startStop.setText(running ? "정지" : "시작");
-            if (running) {
-                startPdr();
-                requestScan();
-                handler.postDelayed(periodicScan, REFRESH_MS);
-            } else {
-                if (pdrTracker != null) {
-                    pdrTracker.stop();
-                }
-                handler.removeCallbacks(periodicScan);
-                statusText.setText("정지됨");
-            }
-        });
-
-        Button rotateLeft = new Button(this);
-        rotateLeft.setText("-5");
-        rotateLeft.setOnClickListener(v -> adjustHeadingOffset(-5.0));
-
-        Button rotateRight = new Button(this);
-        rotateRight.setText("+5");
-        rotateRight.setOnClickListener(v -> adjustHeadingOffset(5.0));
-
-        headingOffsetText = new TextView(this);
-        headingOffsetText.setTextSize(13f);
-        headingOffsetText.setPadding(dp(8), 0, 0, 0);
-
-        toolbar.addView(floorSpinner, new LinearLayout.LayoutParams(dp(110), LinearLayout.LayoutParams.WRAP_CONTENT));
-        toolbar.addView(refresh, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
-        toolbar.addView(startStop, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
-        toolbar.addView(rotateLeft, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
-        toolbar.addView(rotateRight, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
-        toolbar.addView(headingOffsetText, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
-        updateHeadingOffsetText();
-
-        LinearLayout navBar = new LinearLayout(this);
-        navBar.setOrientation(LinearLayout.HORIZONTAL);
-        navBar.setGravity(Gravity.CENTER_VERTICAL);
-        navBar.setPadding(pad, 0, pad, dp(8));
+        // --- Top search bar card ---
+        LinearLayout topCard = new LinearLayout(this);
+        topCard.setOrientation(LinearLayout.HORIZONTAL);
+        topCard.setGravity(Gravity.CENTER_VERTICAL);
+        topCard.setPadding(dp(14), dp(10), dp(14), dp(10));
+        topCard.setBackground(makeRoundCard(0xffffffff, dp(28)));
+        topCard.setElevation(dp(4));
 
         destinationInput = new EditText(this);
         destinationInput.setSingleLine(true);
-        destinationInput.setHint("room");
-        destinationInput.setTextSize(14f);
+        destinationInput.setHint("목적지 검색 (예: 302)");
+        destinationInput.setTextSize(15f);
+        destinationInput.setBackground(null);
 
         travelModeSpinner = new Spinner(this);
-        ArrayAdapter<String> modeAdapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, new String[]{"stairs", "elevator"});
+        ArrayAdapter<String> modeAdapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, new String[]{"계단", "엘리베이터"});
         modeAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
         travelModeSpinner.setAdapter(modeAdapter);
 
-        Button guide = new Button(this);
-        guide.setText("Guide");
+        Button guide = makeRoundButton("길찾기", 0xff03C75A, 0xffffffff);
         guide.setOnClickListener(v -> {
             activeDestinationQuery = destinationInput.getText().toString();
             clearFloorTransition();
             updateNavigationRoute();
         });
 
-        navBar.addView(destinationInput, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
-        navBar.addView(travelModeSpinner, new LinearLayout.LayoutParams(dp(120), LinearLayout.LayoutParams.WRAP_CONTENT));
-        navBar.addView(guide, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        topCard.addView(destinationInput, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        topCard.addView(travelModeSpinner, new LinearLayout.LayoutParams(dp(96), LinearLayout.LayoutParams.WRAP_CONTENT));
+        topCard.addView(guide, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        FrameLayout.LayoutParams topParams = new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT);
+        topParams.setMargins(dp(14), dp(48), dp(14), 0);
+        topParams.gravity = Gravity.TOP;
+        root.addView(topCard, topParams);
+
+        // --- Right-side floating controls ---
+        LinearLayout rightControls = new LinearLayout(this);
+        rightControls.setOrientation(LinearLayout.VERTICAL);
+        rightControls.setGravity(Gravity.CENTER_HORIZONTAL);
+
+        // Floor spinner card
+        LinearLayout floorCard = new LinearLayout(this);
+        floorCard.setOrientation(LinearLayout.VERTICAL);
+        floorCard.setGravity(Gravity.CENTER);
+        floorCard.setPadding(dp(4), dp(4), dp(4), dp(4));
+        floorCard.setBackground(makeRoundCard(0xffffffff, dp(12)));
+        floorCard.setElevation(dp(3));
+
+        floorSpinner = new Spinner(this);
+        ArrayAdapter<String> floorAdapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, new String[]{"auto", "3F", "4F", "5F"});
+        floorAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        floorSpinner.setAdapter(floorAdapter);
+        floorSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override
+            public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+                String value = (String) parent.getItemAtPosition(position);
+                requestedFloor = "auto".equals(value) ? null : Integer.parseInt(value.replace("F", ""));
+                requestScan();
+            }
+            @Override
+            public void onNothingSelected(AdapterView<?> parent) {}
+        });
+        floorCard.addView(floorSpinner);
+
+        // Action buttons card
+        LinearLayout actionCard = new LinearLayout(this);
+        actionCard.setOrientation(LinearLayout.VERTICAL);
+        actionCard.setGravity(Gravity.CENTER);
+        actionCard.setPadding(dp(6), dp(6), dp(6), dp(6));
+        actionCard.setBackground(makeRoundCard(0xffffffff, dp(12)));
+        actionCard.setElevation(dp(3));
+
+        Button refresh = makeFabButton("↻");
+        refresh.setOnClickListener(v -> requestScan());
+
+        startStopBtn = makeFabButton("■");
+        startStopBtn.setOnClickListener(v -> {
+            running = !running;
+            startStopBtn.setText(running ? "■" : "▶");
+            if (running) {
+                startPdr();
+                requestScan();
+                handler.postDelayed(periodicScan, REFRESH_MS);
+            } else {
+                if (pdrTracker != null) pdrTracker.stop();
+                handler.removeCallbacks(periodicScan);
+                statusText.setText("정지됨");
+            }
+        });
+
+        Button rotateLeft = makeFabButton("◀");
+        rotateLeft.setOnClickListener(v -> adjustHeadingOffset(-5.0));
+
+        headingOffsetText = new TextView(this);
+        headingOffsetText.setTextSize(11f);
+        headingOffsetText.setGravity(Gravity.CENTER);
+        headingOffsetText.setPadding(0, dp(2), 0, dp(2));
+
+        Button rotateRight = makeFabButton("▶");
+        rotateRight.setOnClickListener(v -> adjustHeadingOffset(5.0));
+
+        actionCard.addView(refresh);
+        actionCard.addView(startStopBtn);
+        actionCard.addView(rotateLeft);
+        actionCard.addView(headingOffsetText);
+        actionCard.addView(rotateRight);
+
+        rightControls.addView(floorCard, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        rightControls.addView(makeVerticalSpacer(dp(8)));
+        rightControls.addView(actionCard, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        FrameLayout.LayoutParams rightParams = new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT);
+        rightParams.setMargins(0, dp(130), dp(12), 0);
+        rightParams.gravity = Gravity.TOP | Gravity.END;
+        root.addView(rightControls, rightParams);
+
+        // --- Bottom info card ---
+        LinearLayout bottomCard = new LinearLayout(this);
+        bottomCard.setOrientation(LinearLayout.VERTICAL);
+        bottomCard.setPadding(dp(16), dp(10), dp(16), dp(14));
+        bottomCard.setBackground(makeRoundCard(0xffffffff, dp(20)));
+        bottomCard.setElevation(dp(6));
+
+        // Drag handle
+        View handle = new View(this);
+        handle.setBackgroundColor(0xffcccccc);
+        LinearLayout.LayoutParams handleParams = new LinearLayout.LayoutParams(dp(36), dp(4));
+        handleParams.gravity = Gravity.CENTER_HORIZONTAL;
+        handleParams.bottomMargin = dp(10);
+        bottomCard.addView(handle, handleParams);
 
         positionText = new TextView(this);
-        positionText.setText("위치: -");
         positionText.setTextSize(15f);
-        positionText.setPadding(pad, 0, pad, dp(4));
+        positionText.setTypeface(null, Typeface.BOLD);
+        positionText.setText("위치: -");
 
         statusText = new TextView(this);
+        statusText.setTextSize(13f);
+        statusText.setTextColor(0xff666666);
         statusText.setText("대기 중");
-        statusText.setTextSize(14f);
-        statusText.setPadding(pad, 0, pad, dp(8));
+        statusText.setPadding(0, dp(2), 0, dp(4));
 
-        mapView = new FloorMapView(this);
+        // Toggle detail button
+        Button toggleDetail = new Button(this);
+        toggleDetail.setText("상세 ▼");
+        toggleDetail.setTextSize(12f);
+        toggleDetail.setTextColor(0xff03C75A);
+        toggleDetail.setBackground(null);
+        toggleDetail.setPadding(0, dp(2), 0, 0);
+        toggleDetail.setOnClickListener(v -> {
+            detailExpanded = !detailExpanded;
+            detailPanel.setVisibility(detailExpanded ? View.VISIBLE : View.GONE);
+            toggleDetail.setText(detailExpanded ? "상세 ▲" : "상세 ▼");
+        });
+
+        detailPanel = new LinearLayout(this);
+        detailPanel.setOrientation(LinearLayout.VERTICAL);
+        detailPanel.setVisibility(View.GONE);
 
         detailText = new TextView(this);
-        detailText.setTextSize(13f);
-        detailText.setPadding(pad, pad, pad, pad);
+        detailText.setTextSize(12f);
+        detailText.setTextColor(0xff444444);
+        detailText.setPadding(0, dp(6), 0, 0);
         ScrollView details = new ScrollView(this);
         details.addView(detailText);
+        detailPanel.addView(details, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(150)));
 
-        root.addView(toolbar);
-        root.addView(navBar);
-        root.addView(positionText);
-        root.addView(statusText);
-        root.addView(mapView, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
-        root.addView(details, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(180)));
+        bottomCard.addView(positionText);
+        bottomCard.addView(statusText);
+        bottomCard.addView(toggleDetail);
+        bottomCard.addView(detailPanel);
+
+        FrameLayout.LayoutParams bottomParams = new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT);
+        bottomParams.setMargins(dp(12), 0, dp(12), dp(16));
+        bottomParams.gravity = Gravity.BOTTOM;
+        root.addView(bottomCard, bottomParams);
+
         setContentView(root);
+        updateHeadingOffsetText();
+    }
+
+    private GradientDrawable makeRoundCard(int bgColor, int cornerRadius) {
+        GradientDrawable d = new GradientDrawable();
+        d.setColor(bgColor);
+        d.setCornerRadius(cornerRadius);
+        return d;
+    }
+
+    private Button makeRoundButton(String text, int bgColor, int textColor) {
+        Button btn = new Button(this);
+        btn.setText(text);
+        btn.setTextSize(13f);
+        btn.setTextColor(textColor);
+        btn.setPadding(dp(14), dp(6), dp(14), dp(6));
+        GradientDrawable d = new GradientDrawable();
+        d.setColor(bgColor);
+        d.setCornerRadius(dp(20));
+        btn.setBackground(d);
+        return btn;
+    }
+
+    private Button makeFabButton(String text) {
+        Button btn = new Button(this);
+        btn.setText(text);
+        btn.setTextSize(16f);
+        btn.setTextColor(0xff333333);
+        btn.setPadding(dp(4), dp(4), dp(4), dp(4));
+        btn.setBackground(null);
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(dp(40), dp(40));
+        p.gravity = Gravity.CENTER_HORIZONTAL;
+        btn.setLayoutParams(p);
+        return btn;
+    }
+
+    private View makeVerticalSpacer(int height) {
+        View v = new View(this);
+        v.setLayoutParams(new LinearLayout.LayoutParams(1, height));
+        return v;
     }
 
     private void requestScan() {
