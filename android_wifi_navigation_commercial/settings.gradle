@@ -14,5 +14,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "WifiNavigation"
+rootProject.name = "WifiNavigationCommercial"
 include ":app"

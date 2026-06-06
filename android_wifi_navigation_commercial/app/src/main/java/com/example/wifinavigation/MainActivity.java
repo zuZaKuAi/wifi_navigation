@@ -62,8 +62,11 @@ public final class MainActivity extends Activity {
     private Spinner travelModeSpinner;
     private Spinner floorSpinner;
     private LinearLayout bottomSheet;
+    private LinearLayout detailGroup;
+    private FrameLayout emptyMapOverlay;
     private boolean running = true;
     private boolean debugVisible;
+    private boolean detailExpanded = false;
     private Integer requestedFloor;
     private PdrTracker pdrTracker;
     private NavigationGraph navigationGraph;
@@ -152,15 +155,50 @@ public final class MainActivity extends Activity {
         FrameLayout root = new FrameLayout(this);
         root.setBackgroundColor(Color.rgb(238, 241, 245));
 
+        // --- Map (fills entire screen) ---
         mapView = new FloorMapView(this);
         root.addView(mapView, new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.MATCH_PARENT
         ));
 
+        // --- Empty map overlay (shown until a valid position is received) ---
+        emptyMapOverlay = new FrameLayout(this);
+        emptyMapOverlay.setBackgroundColor(Color.argb(200, 255, 255, 255));
+        LinearLayout overlayContent = new LinearLayout(this);
+        overlayContent.setOrientation(LinearLayout.VERTICAL);
+        overlayContent.setGravity(Gravity.CENTER);
+        overlayContent.setPadding(dp(32), 0, dp(32), dp(48));
+        TextView overlayIcon = new TextView(this);
+        overlayIcon.setText("⊙");
+        overlayIcon.setTextSize(64f);
+        overlayIcon.setTextColor(Color.rgb(3, 199, 90));
+        overlayIcon.setGravity(Gravity.CENTER);
+        TextView overlayTitle = label("위치를 확인 중입니다", 18f, Color.rgb(17, 24, 39), true);
+        overlayTitle.setGravity(Gravity.CENTER);
+        LinearLayout.LayoutParams overlayTitleParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        overlayTitleParams.topMargin = dp(12);
+        TextView overlaySubtitle = label("Wi-Fi 스캔 후 자동으로 현재 위치를\n표시합니다", 14f, Color.rgb(107, 114, 128), false);
+        overlaySubtitle.setGravity(Gravity.CENTER);
+        LinearLayout.LayoutParams overlaySubParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        overlaySubParams.topMargin = dp(8);
+        overlayContent.addView(overlayIcon);
+        overlayContent.addView(overlayTitle, overlayTitleParams);
+        overlayContent.addView(overlaySubtitle, overlaySubParams);
+        emptyMapOverlay.addView(overlayContent, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                Gravity.CENTER));
+        root.addView(emptyMapOverlay, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT));
+
+        // --- Top stack: search bar + status banner ---
         LinearLayout topStack = new LinearLayout(this);
         topStack.setOrientation(LinearLayout.VERTICAL);
-        topStack.setPadding(dp(14), dp(14), dp(14), 0);
+        topStack.setPadding(dp(14), dp(44), dp(14), 0);
         FrameLayout.LayoutParams topParams = new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.WRAP_CONTENT,
@@ -168,28 +206,33 @@ public final class MainActivity extends Activity {
         );
         root.addView(topStack, topParams);
 
+        // Search card (1) — search icon + input + guide button
         LinearLayout searchCard = panel();
         searchCard.setOrientation(LinearLayout.HORIZONTAL);
         searchCard.setGravity(Gravity.CENTER_VERTICAL);
-        searchCard.setPadding(dp(14), dp(10), dp(10), dp(10));
+        searchCard.setPadding(dp(14), dp(8), dp(10), dp(8));
+
+        TextView searchIcon = new TextView(this);
+        searchIcon.setText("🔍");
+        searchIcon.setTextSize(17f);
+        searchIcon.setPadding(0, 0, dp(8), 0);
 
         destinationInput = new EditText(this);
         destinationInput.setSingleLine(true);
-        destinationInput.setHint("목적지 강의실 또는 호실");
+        destinationInput.setHint("강의실 또는 호실 검색");
         destinationInput.setTextSize(16f);
         destinationInput.setTextColor(Color.rgb(26, 32, 44));
         destinationInput.setHintTextColor(Color.rgb(117, 128, 145));
         destinationInput.setBackgroundColor(Color.TRANSPARENT);
 
-        Button guideButton = pillButton("길찾기", Color.rgb(38, 99, 235), Color.WHITE);
+        Button guideButton = pillButton("길찾기", Color.rgb(3, 199, 90), Color.WHITE);
         guideButton.setOnClickListener(v -> startGuidance());
 
-        searchCard.addView(destinationInput, new LinearLayout.LayoutParams(0, dp(48), 1f));
+        searchCard.addView(searchIcon);
+        searchCard.addView(destinationInput, new LinearLayout.LayoutParams(0, dp(52), 1f));
         searchCard.addView(guideButton, new LinearLayout.LayoutParams(dp(88), dp(44)));
         topStack.addView(searchCard, new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-        ));
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
 
         statusBanner = new TextView(this);
         statusBanner.setTextSize(13f);
@@ -197,33 +240,31 @@ public final class MainActivity extends Activity {
         statusBanner.setPadding(dp(14), dp(9), dp(14), dp(9));
         statusBanner.setBackground(roundRect(Color.argb(235, 255, 255, 255), dp(18), Color.argb(30, 15, 23, 42), 1));
         LinearLayout.LayoutParams bannerParams = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-        );
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
         bannerParams.topMargin = dp(10);
         topStack.addView(statusBanner, bannerParams);
 
+        // --- Right side floating controls (2) ---
         LinearLayout floatingControls = new LinearLayout(this);
         floatingControls.setOrientation(LinearLayout.VERTICAL);
-        floatingControls.setGravity(Gravity.CENTER);
+        floatingControls.setGravity(Gravity.TOP | Gravity.CENTER_HORIZONTAL);
         FrameLayout.LayoutParams controlParams = new FrameLayout.LayoutParams(
-                dp(58),
-                FrameLayout.LayoutParams.WRAP_CONTENT,
-                Gravity.RIGHT | Gravity.CENTER_VERTICAL
-        );
+                dp(62), FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.END | Gravity.TOP);
         controlParams.rightMargin = dp(14);
+        controlParams.topMargin = dp(160);
         root.addView(floatingControls, controlParams);
 
+        // Floor label + spinner in one card
+        LinearLayout floorCard = new LinearLayout(this);
+        floorCard.setOrientation(LinearLayout.VERTICAL);
+        floorCard.setGravity(Gravity.CENTER_HORIZONTAL);
+        floorCard.setBackground(roundRect(Color.argb(244, 255, 255, 255), dp(18), Color.argb(30, 15, 23, 42), 1));
+        floorCard.setElevation(dp(5));
+        floorCard.setPadding(dp(4), dp(6), dp(4), dp(4));
+
         currentFloorText = floatingLabel("AUTO");
-        Button locateButton = squareButton("◎");
-        locateButton.setOnClickListener(v -> {
-            mapView.resetViewport();
-            requestScan();
-        });
-        Button pauseButton = squareButton("Ⅱ");
-        pauseButton.setOnClickListener(v -> toggleTracking(pauseButton));
-        Button debugButton = squareButton("⋯");
-        debugButton.setOnClickListener(v -> toggleDebug());
+        currentFloorText.setBackground(null);
+        currentFloorText.setElevation(0);
 
         floorSpinner = new Spinner(this);
         ArrayAdapter<String> floorAdapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, new String[]{"auto", "3F", "4F", "5F"});
@@ -237,31 +278,57 @@ public final class MainActivity extends Activity {
                 currentFloorText.setText(requestedFloor == null ? "AUTO" : value);
                 requestScan();
             }
-
             @Override
-            public void onNothingSelected(AdapterView<?> parent) {
-            }
+            public void onNothingSelected(AdapterView<?> parent) {}
         });
+        floorCard.addView(currentFloorText, new LinearLayout.LayoutParams(dp(54), dp(28)));
+        floorCard.addView(floorSpinner, new LinearLayout.LayoutParams(dp(54), dp(48)));
+        floatingControls.addView(floorCard, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
 
-        floatingControls.addView(currentFloorText, new LinearLayout.LayoutParams(dp(58), dp(34)));
-        floatingControls.addView(locateButton, controlButtonParams());
-        floatingControls.addView(pauseButton, controlButtonParams());
-        floatingControls.addView(debugButton, controlButtonParams());
-        floatingControls.addView(floorSpinner, new LinearLayout.LayoutParams(dp(58), dp(52)));
+        // Action buttons card
+        LinearLayout actionCard = new LinearLayout(this);
+        actionCard.setOrientation(LinearLayout.VERTICAL);
+        actionCard.setGravity(Gravity.CENTER_HORIZONTAL);
+        actionCard.setBackground(roundRect(Color.argb(244, 255, 255, 255), dp(18), Color.argb(30, 15, 23, 42), 1));
+        actionCard.setElevation(dp(5));
+        actionCard.setPadding(0, dp(6), 0, dp(6));
+        LinearLayout.LayoutParams actionCardParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        actionCardParams.topMargin = dp(10);
 
+        Button locateButton = iconButtonWithLabel("⊙", "위치");
+        locateButton.setOnClickListener(v -> { mapView.resetViewport(); requestScan(); });
+        Button pauseButton = iconButtonWithLabel("❚❚", "정지");
+        pauseButton.setOnClickListener(v -> toggleTracking(pauseButton));
+        Button debugButton = iconButtonWithLabel("⋮", "상세");
+        debugButton.setOnClickListener(v -> toggleDebug());
+
+        actionCard.addView(locateButton, controlButtonParams());
+        actionCard.addView(pauseButton, controlButtonParams());
+        actionCard.addView(debugButton, controlButtonParams());
+        floatingControls.addView(actionCard, actionCardParams);
+
+        // --- Bottom sheet (3) ---
         bottomSheet = panel();
         bottomSheet.setOrientation(LinearLayout.VERTICAL);
-        bottomSheet.setPadding(dp(18), dp(16), dp(18), dp(16));
+        bottomSheet.setPadding(dp(18), dp(14), dp(18), dp(14));
         FrameLayout.LayoutParams bottomParams = new FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.WRAP_CONTENT,
-                Gravity.BOTTOM
-        );
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM);
         bottomParams.leftMargin = dp(12);
         bottomParams.rightMargin = dp(12);
         bottomParams.bottomMargin = dp(12);
         root.addView(bottomSheet, bottomParams);
 
+        // Drag handle
+        View handle = new View(this);
+        handle.setBackgroundColor(Color.rgb(209, 213, 219));
+        LinearLayout.LayoutParams handleParams = new LinearLayout.LayoutParams(dp(36), dp(4));
+        handleParams.gravity = Gravity.CENTER_HORIZONTAL;
+        handleParams.bottomMargin = dp(10);
+        bottomSheet.addView(handle, handleParams);
+
+        // Title row: title/subtitle + travel mode spinner
         LinearLayout titleRow = new LinearLayout(this);
         titleRow.setGravity(Gravity.CENTER_VERTICAL);
         titleRow.setOrientation(LinearLayout.HORIZONTAL);
@@ -282,30 +349,52 @@ public final class MainActivity extends Activity {
             public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
                 updateNavigationRoute();
             }
-
             @Override
-            public void onNothingSelected(AdapterView<?> parent) {
-            }
+            public void onNothingSelected(AdapterView<?> parent) {}
         });
 
         titleRow.addView(titleTexts, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
         titleRow.addView(travelModeSpinner, new LinearLayout.LayoutParams(dp(124), LinearLayout.LayoutParams.WRAP_CONTENT));
         bottomSheet.addView(titleRow);
 
+        // Metric row: distance/time + detail toggle button
+        LinearLayout metricRow = new LinearLayout(this);
+        metricRow.setOrientation(LinearLayout.HORIZONTAL);
+        metricRow.setGravity(Gravity.CENTER_VERTICAL);
+        LinearLayout.LayoutParams metricRowParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        metricRowParams.topMargin = dp(10);
+
         routeMetricText = label("거리 -- · 예상 --", 15f, Color.rgb(37, 99, 235), true);
-        LinearLayout.LayoutParams metricParams = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-        );
-        metricParams.topMargin = dp(10);
-        bottomSheet.addView(routeMetricText, metricParams);
+        Button detailToggle = new Button(this);
+        detailToggle.setText("상세 ▾");
+        detailToggle.setTextSize(12f);
+        detailToggle.setTextColor(Color.rgb(107, 114, 128));
+        detailToggle.setBackground(null);
+        detailToggle.setPadding(dp(8), 0, 0, 0);
+        detailToggle.setOnClickListener(v -> {
+            detailExpanded = !detailExpanded;
+            detailGroup.setVisibility(detailExpanded ? View.VISIBLE : View.GONE);
+            detailToggle.setText(detailExpanded ? "상세 ▴" : "상세 ▾");
+        });
+        metricRow.addView(routeMetricText, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        metricRow.addView(detailToggle);
+        bottomSheet.addView(metricRow, metricRowParams);
+
+        // Detail group (collapsed by default)
+        detailGroup = new LinearLayout(this);
+        detailGroup.setOrientation(LinearLayout.VERTICAL);
+        detailGroup.setVisibility(View.GONE);
+        LinearLayout.LayoutParams detailGroupParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        detailGroupParams.topMargin = dp(8);
 
         currentPositionText = label("좌표 --", 13f, Color.rgb(75, 85, 99), false);
         accuracyText = label("AP 매칭 --", 13f, Color.rgb(75, 85, 99), false);
         headingText = label("방향 보정 10°", 13f, Color.rgb(75, 85, 99), false);
-        bottomSheet.addView(currentPositionText);
-        bottomSheet.addView(accuracyText);
-        bottomSheet.addView(headingText);
+        detailGroup.addView(currentPositionText);
+        detailGroup.addView(accuracyText);
+        detailGroup.addView(headingText);
 
         LinearLayout calibrationRow = new LinearLayout(this);
         calibrationRow.setOrientation(LinearLayout.HORIZONTAL);
@@ -314,30 +403,38 @@ public final class MainActivity extends Activity {
         left.setOnClickListener(v -> adjustHeadingOffset(-5.0));
         right.setOnClickListener(v -> adjustHeadingOffset(5.0));
         calibrationRow.addView(left, new LinearLayout.LayoutParams(0, dp(40), 1f));
-        LinearLayout.LayoutParams rightParams = new LinearLayout.LayoutParams(0, dp(40), 1f);
-        rightParams.leftMargin = dp(8);
-        calibrationRow.addView(right, rightParams);
+        LinearLayout.LayoutParams rightCalParams = new LinearLayout.LayoutParams(0, dp(40), 1f);
+        rightCalParams.leftMargin = dp(8);
+        calibrationRow.addView(right, rightCalParams);
         LinearLayout.LayoutParams calibrationParams = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-        );
-        calibrationParams.topMargin = dp(10);
-        bottomSheet.addView(calibrationRow, calibrationParams);
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        calibrationParams.topMargin = dp(8);
+        detailGroup.addView(calibrationRow, calibrationParams);
 
         debugText = label("", 12f, Color.rgb(75, 85, 99), false);
         debugText.setVisibility(View.GONE);
         ScrollView debugScroll = new ScrollView(this);
         debugScroll.addView(debugText);
         LinearLayout.LayoutParams debugParams = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                dp(130)
-        );
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(130));
         debugParams.topMargin = dp(8);
-        bottomSheet.addView(debugScroll, debugParams);
+        detailGroup.addView(debugScroll, debugParams);
         debugScroll.setVisibility(View.GONE);
         debugText.setTag(debugScroll);
 
+        bottomSheet.addView(detailGroup, detailGroupParams);
+
         setContentView(root);
+    }
+
+    private Button iconButtonWithLabel(String icon, String labelText) {
+        Button btn = new Button(this);
+        btn.setText(icon);
+        btn.setTextSize(18f);
+        btn.setTextColor(Color.rgb(31, 41, 55));
+        btn.setBackground(null);
+        btn.setContentDescription(labelText);
+        return btn;
     }
 
     private void startTracking() {
@@ -357,7 +454,7 @@ public final class MainActivity extends Activity {
     private void toggleTracking(Button button) {
         running = !running;
         if (running) {
-            button.setText("Ⅱ");
+            button.setText("❚❚");
             startTracking();
             showStatus("실시간 위치 갱신을 다시 시작했습니다.");
         } else {
@@ -416,6 +513,7 @@ public final class MainActivity extends Activity {
         if (position.estimate == null || position.floor == null) {
             latestMatched = position.matched;
             latestWifiOnlyEstimate = null;
+            if (emptyMapOverlay != null) emptyMapOverlay.setVisibility(View.VISIBLE);
             if (floorTransitionActive) {
                 showFloorTransitionPosition();
                 debugText.setText("목표 층 Wi-Fi를 기다리는 중입니다.");
@@ -431,6 +529,7 @@ public final class MainActivity extends Activity {
             mapView.showPosition(position.floor, null, position.matched);
             return;
         }
+        if (emptyMapOverlay != null) emptyMapOverlay.setVisibility(View.GONE);
 
         latestMatched = position.matched;
         latestWifiOnlyEstimate = position.estimate;
